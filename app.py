@@ -27,17 +27,101 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .main-header { font-size: 2.0rem; font-weight: 700; color: #e63946; text-align: center; }
-    .sub-header { text-align: center; color: #666; margin-bottom: 1rem; }
-    .disclaimer {
-        background-color: #fff3cd; border-left: 5px solid #ffc107;
-        padding: 10px 14px; margin: 10px 0; border-radius: 4px; font-size: 0.92rem;
-    }
+  .block-container { padding-top: 1.2rem; padding-bottom: 2rem; max-width: 1200px; }
+  [data-testid="stSidebar"] { background: linear-gradient(180deg, #1d3557 0%, #0d1b2a 100%); }
+  [data-testid="stSidebar"] * { color: #f1faee !important; }
+  [data-testid="stSidebar"] .stSelectbox label,
+  [data-testid="stSidebar"] .stSlider label,
+  [data-testid="stSidebar"] .stCheckbox label { color: #f1faee !important; }
+  [data-testid="stSidebar"] [data-baseweb="select"] > div { background: #1b263b; color: #fff; }
+  [data-testid="stSidebar"] hr { border-color: #457b9d; }
+
+  .main-header {
+    font-size: 1.85rem; font-weight: 800; text-align: center;
+    background: linear-gradient(90deg, #e63946, #f4a261);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; margin-bottom: 0.15rem; letter-spacing: 0.02em;
+  }
+  .sub-header { text-align: center; color: #6c757d; font-size: 0.95rem; margin-bottom: 0.8rem; }
+
+  .disclaimer {
+    background: linear-gradient(90deg, #fff3cd, #ffe8a1);
+    border-left: 5px solid #e9a825;
+    padding: 12px 16px; margin: 8px 0 16px; border-radius: 8px;
+    font-size: 0.9rem; color: #5c4a00; line-height: 1.5;
+  }
+
+  .num-ball {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 2rem; height: 2rem; padding: 0 0.35rem; margin: 0 3px 4px;
+    border-radius: 50%; font-weight: 700; font-size: 0.85rem;
+    color: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  }
+  .num-ball.red { background: linear-gradient(145deg, #e63946, #c1121f); }
+  .num-ball.blue { background: linear-gradient(145deg, #457b9d, #1d3557); }
+  .num-ball.gold { background: linear-gradient(145deg, #f4a261, #e76f51); }
+  .num-ball.green { background: linear-gradient(145deg, #2a9d8f, #1b7a6e); }
+  .draw-line {
+    background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 12px;
+    padding: 12px 14px; margin: 8px 0 12px; text-align: center; line-height: 2.2;
+  }
+
+  .auto-card {
+    background: #fff; border: 1px solid #e9ecef; border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .tag-combo {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-weight: 700; font-size: 0.9rem; color: #fff;
+    background: linear-gradient(90deg, #e63946, #f4a261);
+  }
+
+  [data-testid="stMetric"] {
+    background: #f8f9fa; border-radius: 10px; padding: 10px 12px;
+    border: 1px solid #eef1f4;
+  }
+  [data-testid="stMetricLabel"] { font-size: 0.85rem; color: #6c757d; }
+  [data-testid="stMetricValue"] { font-size: 1.35rem; font-weight: 700; color: #1d3557; }
+
+  .stTabs [data-baseweb="tab-list"] {
+    gap: 6px; background: #f1f3f5; padding: 6px; border-radius: 10px;
+  }
+  .stTabs [data-baseweb="tab"] {
+    border-radius: 8px; padding: 8px 14px; font-weight: 600;
+  }
+  .stTabs [aria-selected="true"] {
+    background: #fff !important; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+
+  @media (max-width: 768px) {
+    .main-header { font-size: 1.45rem; }
+    .num-ball { min-width: 1.75rem; height: 1.75rem; font-size: 0.78rem; margin: 0 2px 3px; }
+    .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+    [data-testid="stMetricValue"] { font-size: 1.15rem; }
+  }
+
+  .footer-note {
+    text-align: center; color: #adb5bd; font-size: 0.82rem;
+    margin-top: 1.5rem; padding-top: 0.8rem; border-top: 1px solid #e9ecef;
+  }
 </style>
 """, unsafe_allow_html=True)
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+def balls_html(nums, color="red"):
+    """生成彩色号码球 HTML"""
+    parts = []
+    for n in nums:
+        parts.append(f'<span class="num-ball {color}">{int(n):02d}</span>')
+    return "".join(parts)
+
+def draw_box(html_inner: str) -> None:
+    st.markdown(f'<div class="draw-line">{html_inner}</div>', unsafe_allow_html=True)
+
+
 
 API_BASE_17500 = "https://data.17500.cn"
 API_BASE_16868 = "https://api.api16868.com"
@@ -380,8 +464,10 @@ if lottery == "双色球":
     latest = df.iloc[-1]
     c1.metric("总期数", f"{len(df):,}"); c2.metric("最新期号", latest["期号"])
     c3.metric("开奖日", latest["开奖日期"].strftime("%Y-%m-%d"))
-    reds = " ".join(f"{latest[f'红球{i}']:02d}" for i in range(1, 7))
-    c4.metric("开奖号码", f"{reds} + {latest['蓝球']:02d}")
+    reds = [latest[f"红球{i}"] for i in range(1, 7)]
+    blue = latest["蓝球"]
+    c4.metric("蓝球", f"{blue:02d}")
+    draw_box(balls_html(reds, "red") + " + " + balls_html([blue], "blue"))
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 频率", "📉 遗漏", "📈 走势", "🎯 五码对照", "📋 历史"])
     with tab1:
         rf, bf = ssq_freq(df, n_recent)
@@ -420,8 +506,8 @@ elif lottery == "快乐8（官方）":
     c1, c2, c3 = st.columns(3)
     latest = df.iloc[-1]
     c1.metric("总期数", f"{len(df):,}"); c2.metric("最新期号", latest["期号"]); c3.metric("开奖日", latest["开奖日期"].strftime("%Y-%m-%d"))
-    nums = " ".join(f"{latest[f'号{i}']:02d}" for i in range(1, 21))
-    st.info(f"最新开奖号码（20个）：{nums}")
+    nums = [latest[f"号{i}"] for i in range(1, 21)]
+    draw_box("<b>最新开奖</b><br/>" + balls_html(nums, "green"))
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 频率热冷", "📉 遗漏", "📈 和值/奇偶/大小", "🎯 五码对照", "📋 历史"])
     with tab1:
         freq = kl8_freq(df, n_recent)
@@ -469,8 +555,9 @@ elif lottery == "极速飞艇（PK10）":
     c3.metric("开奖时间", str(latest["开奖时间"])[:19])
     gy = int(latest["冠亚和"]); dx_now = "大" if gy > 11 else "小"
     c4.metric("冠亚和 / 大小", f"{gy} / {dx_now}")
-    nums = " ".join(f"{latest[p]:02d}" for p in ["冠军", "亚军", "第三", "第四", "第五", "第六", "第七", "第八", "第九", "第十"])
-    st.info(f"最新开奖：{nums}")
+    pos = ["冠军", "亚军", "第三", "第四", "第五", "第六", "第七", "第八", "第九", "第十"]
+    nums = [latest[p] for p in pos]
+    draw_box("<b>最新开奖</b><br/>" + balls_html(nums, "gold"))
     if rt: st.caption(f"实时接口 · 下期 {rt.get('下期期号','')} · 服务器时间 {rt.get('服务器时间','')}")
     _seq_dx = feiting_dx_sequence(df); _seq_ds = feiting_ds_sequence(df); _pat_n = 5
     if len(_seq_dx) >= _pat_n:
@@ -627,7 +714,11 @@ elif lottery == "极速快乐8":
     c1.metric("最新期号", latest["期号"]); c2.metric("开奖时间", str(latest["开奖时间"])[:19])
     c3.metric("和值", latest["和值"]); c4.metric("组合", latest["组合"])
     nums_str = " ".join(f"{n:02d}" for n in latest["号码"])
-    st.info(f"最新开奖（20码）：{nums_str} ｜ {latest['大小']} / {latest['单双']} / **{latest['组合']}**")
+    combo = latest["组合"]
+    draw_box(
+        "<b>最新开奖</b><br/>" + balls_html(latest["号码"], "green")
+        + f'<br/><span class="tag-combo">{latest["大小"]} · {latest["单双"]} · {combo}</span>'
+    )
     st.caption(f"规则：和值≥810 为大，<810 为小；奇数为单、偶数为双 → 组合为大单/大双/小单/小双。下期 {latest.get('下期期号','')} · {latest.get('下期时间','')} · 已缓存 {len(hist)} 期")
     _pat_n = 5
     st.markdown("#### 自动对照 · 下期「大单/大双/小单/小双」（最近 5 期组合形态）")
@@ -698,5 +789,4 @@ elif lottery == "极速快乐8":
         st.session_state.kl8s_history = []; st.rerun()
     if st.button("立即刷新最新一期", key="kl8s_refresh"): st.rerun()
 
-st.markdown("---")
-st.caption("仅供学习与数据分析练习 | 请理性购彩，远离赌博心态")
+st.markdown('<div class="footer-note">仅供学习与数据分析练习 · 请理性购彩，远离赌博心态</div>', unsafe_allow_html=True)
