@@ -252,6 +252,13 @@ def load_feiting(days: int = 3) -> pd.DataFrame:
 # 实时: https://api.api16868.com/LuckTwenty/getBaseLuckTewnty.do?lotCode=10047
 KL8_SPEED_CODE = 10047
 
+def classify_kl8_sum(sum_val: int) -> tuple[str, str, str]:
+    """和值大小单双。大: >=810，小: <810；单双按和值奇偶。组合: 大单/大双/小单/小双"""
+    dx = "大" if sum_val >= 810 else "小"
+    ds = "单" if sum_val % 2 == 1 else "双"
+    return dx, ds, dx + ds
+
+
 def fetch_kl8_speed_latest() -> dict | None:
     url = f"https://api.api16868.com/LuckTwenty/getBaseLuckTewnty.do?lotCode={KL8_SPEED_CODE}"
     try:
@@ -264,13 +271,18 @@ def fetch_kl8_speed_latest() -> dict | None:
         nums = [int(x) for x in code.split(",") if x.strip().isdigit()][:20]
         if len(nums) < 20:
             return None
+        s = int(d.get("sumNum") or sum(nums))
+        dx, ds, combo = classify_kl8_sum(s)
         return {
             "期号": str(d.get("preDrawIssue", "")),
             "开奖时间": str(d.get("preDrawTime", "")),
             "下期期号": str(d.get("drawIssue", "")),
             "下期时间": str(d.get("drawTime", "")),
             "号码": nums,
-            "和值": int(d.get("sumNum") or sum(nums)),
+            "和值": s,
+            "大小": dx,
+            "单双": ds,
+            "组合": combo,
             "服务器时间": str(d.get("serverTime", "")),
         }
     except Exception:
@@ -297,33 +309,37 @@ def feiting_champion_stats(df: pd.DataFrame, n: int):
 
 
 def feiting_dx_sequence(df: pd.DataFrame) -> list[str]:
-    """冠亚和大小序列：大=冠亚和>11，小=≤11"""
+    """冠亚和大小：大=和>11，小=≤11"""
     return ["大" if int(x) > 11 else "小" for x in df["冠亚和"].tolist()]
 
 
+def feiting_ds_sequence(df: pd.DataFrame) -> list[str]:
+    """冠亚和单双：奇数=单，偶数=双"""
+    return ["单" if int(x) % 2 == 1 else "双" for x in df["冠亚和"].tolist()]
+
+
 def luzhu_after_pattern(seq: list[str], pattern: list[str]) -> dict:
-    """路珠：某形态之后下一期是大/小的次数"""
-    n = len(pattern)
+    """某连续形态之后，下一期标签分布（大小或单双通用）"""
     from collections import Counter
+    n = len(pattern)
     nexts = []
     for i in range(len(seq) - n):
         if seq[i : i + n] == pattern:
             nexts.append(seq[i + n])
     c = Counter(nexts)
     total = sum(c.values())
-    return {
-        "大": c.get("大", 0),
-        "小": c.get("小", 0),
-        "total": total,
-        "大%": round(c.get("大", 0) / total * 100, 2) if total else 0,
-        "小%": round(c.get("小", 0) / total * 100, 2) if total else 0,
-    }
+    out = {"total": total, "counter": dict(c)}
+    for k, v in c.items():
+        out[k] = v
+        out[f"{k}%"] = round(v / total * 100, 2) if total else 0
+    return out
 
 
-def parse_dx_pattern(text: str) -> list[str] | None:
-    """解析用户输入的大小形态，如 大大大小小 或 大,大,大,小,小"""
+def parse_pattern(text: str, mode: str) -> list[str] | None:
+    """mode=大小 只允许大/小；mode=单双 只允许单/双。默认按 5 期形态对照。"""
     t = text.strip().replace("，", "").replace(",", "").replace(" ", "").replace("　", "")
-    if not t or any(c not in "大小" for c in t):
+    allowed = "大小" if mode == "大小" else "单双"
+    if not t or any(c not in allowed for c in t):
         return None
     return list(t)
 
@@ -653,6 +669,46 @@ elif lottery == "极速飞艇（PK10）":
     if rt:
         st.caption(f"实时接口 · 下期 {rt.get('下期期号','')} · 服务器时间 {rt.get('服务器时间','')}")
 
+    # ===== 每期更新后自动对照：最近5期形态 → 下一期大小/单双历史比例 =====
+    _seq_dx = feiting_dx_sequence(df)
+    _seq_ds = feiting_ds_sequence(df)
+    _pat_n = 5
+    if len(_seq_dx) >= _pat_n:
+        _pat_dx = _seq_dx[-_pat_n:]
+        _pat_ds = _seq_ds[-_pat_n:]
+        _r_dx = luzhu_after_pattern(_seq_dx, _pat_dx)
+        _r_ds = luzhu_after_pattern(_seq_ds, _pat_ds)
+        _n = len(_seq_dx)
+        _base_dx_da = _seq_dx.count("大") / _n * 100
+        _base_dx_xi = _seq_dx.count("小") / _n * 100
+        _base_ds_dan = _seq_ds.count("单") / _n * 100
+        _base_ds_shuang = _seq_ds.count("双") / _n * 100
+
+        st.markdown("#### 自动对照 · 下期大小/单双（最近 5 期形态）")
+        st.caption("开奖结果更新后自动计算。以下是历史条件出现比例，**不是**真实预测概率，请勿据此投注。")
+        a1, a2 = st.columns(2)
+        with a1:
+            st.markdown(f"**大小形态** `{''.join(_pat_dx)}`（最新：{_seq_dx[-1]}）")
+            if _r_dx["total"] > 0:
+                st.metric("历史样本", f"{_r_dx['total']} 次")
+                x1, x2 = st.columns(2)
+                x1.metric("下期「大」", f"{_r_dx.get('大%', 0)}%", f"{_r_dx.get('大', 0)} 次")
+                x2.metric("下期「小」", f"{_r_dx.get('小%', 0)}%", f"{_r_dx.get('小', 0)} 次")
+                st.caption(f"全体基础：大 {_base_dx_da:.1f}% / 小 {_base_dx_xi:.1f}%")
+            else:
+                st.info("该大小形态历史样本不足")
+        with a2:
+            st.markdown(f"**单双形态** `{''.join(_pat_ds)}`（最新：{_seq_ds[-1]}）")
+            if _r_ds["total"] > 0:
+                st.metric("历史样本", f"{_r_ds['total']} 次")
+                x1, x2 = st.columns(2)
+                x1.metric("下期「单」", f"{_r_ds.get('单%', 0)}%", f"{_r_ds.get('单', 0)} 次")
+                x2.metric("下期「双」", f"{_r_ds.get('双%', 0)}%", f"{_r_ds.get('双', 0)} 次")
+                st.caption(f"全体基础：单 {_base_ds_dan:.1f}% / 双 {_base_ds_shuang:.1f}%")
+            else:
+                st.info("该单双形态历史样本不足")
+        st.markdown("---")
+
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 各名次频率", "🏆 冠军 & 冠亚和", "🐉 龙虎/基本形态", "🔴 路珠查询", "📋 历史"
     ])
@@ -696,90 +752,125 @@ elif lottery == "极速飞艇（PK10）":
             st.plotly_chart(fig, use_container_width=True)
 
     with tab4:
-        st.subheader("冠亚和 · 大小路珠查询")
-        st.warning("路珠只是历史形态统计，**不能预测**下一期。每期独立随机，请勿当作投注依据。")
-        st.caption("规则：冠亚和 > 11 为「大」，≤ 11 为「小」。")
+        st.subheader("冠亚和 · 路珠对照（默认每 5 期）")
+        st.warning("只做历史形态统计，**不是**预测。每期开奖独立，请勿当作投注依据。")
 
-        seq = feiting_dx_sequence(df)
-        base_da = seq.count("大")
-        base_xiao = seq.count("小")
+        mode = st.radio("查询类型", ["大小", "单双"], horizontal=True, key="luzhu_mode")
+        if mode == "大小":
+            st.caption("规则：冠亚和 > 11 → 大；≤ 11 → 小")
+            seq = feiting_dx_sequence(df)
+            labels = ("大", "小")
+            colors = {"大": "#e63946", "小": "#457b9d"}
+        else:
+            st.caption("规则：冠亚和为奇数 → 单；偶数 → 双")
+            seq = feiting_ds_sequence(df)
+            labels = ("单", "双")
+            colors = {"单": "#e63946", "双": "#2a9d8f"}
+
         base_total = len(seq)
+        base_counts = {lb: seq.count(lb) for lb in labels}
 
         # 最近路珠展示
-        recent_n = st.slider("显示最近路珠期数", 20, 100, 40, key="luzhu_show_n")
+        recent_n = st.slider("显示最近路珠期数", 20, 120, 50, key="luzhu_show_n")
         recent_seq = seq[-recent_n:]
-        # 用彩色标签展示
         colored = " ".join(
-            f'<span style="color:{"#e63946" if x=="大" else "#457b9d"};font-weight:700">{x}</span>'
+            f'<span style="color:{colors.get(x,"#333")};font-weight:700">{x}</span>'
             for x in recent_seq
         )
-        st.markdown(f"**最近 {recent_n} 期大小：** {colored}", unsafe_allow_html=True)
-        st.write(f"当前末尾形态（最近 5 期）：**{''.join(seq[-5:])}**  → 最新一期是 **{seq[-1]}**")
+        st.markdown(f"**最近 {recent_n} 期（{mode}）：** {colored}", unsafe_allow_html=True)
+
+        pat_len = st.selectbox("对照形态长度（期数）", [3, 4, 5, 6, 7], index=2, key="luzhu_pat_len")
+        # 默认 5 期
+        tail = seq[-pat_len:] if len(seq) >= pat_len else seq
+        st.write(f"当前末尾 **{pat_len} 期** 形态：**{''.join(tail)}**  → 最新一期：**{seq[-1]}**")
 
         st.markdown("---")
-        st.write("**基础比例（全部已加载数据）**")
-        bc1, bc2, bc3 = st.columns(3)
-        bc1.metric("大", f"{base_da} 期", f"{base_da/base_total*100:.1f}%")
-        bc2.metric("小", f"{base_xiao} 期", f"{base_xiao/base_total*100:.1f}%")
-        bc3.metric("总期数", base_total)
+        bc = st.columns(len(labels) + 1)
+        for i, lb in enumerate(labels):
+            pct = base_counts[lb] / base_total * 100 if base_total else 0
+            bc[i].metric(lb, f"{base_counts[lb]} 期", f"{pct:.1f}%")
+        bc[-1].metric("总期数", base_total)
 
         st.markdown("---")
-        st.write("**按形态查询：出现某串大小之后，下一期是大/小的历史比例**")
-        # 快捷：用当前末尾
-        use_tail = st.checkbox("使用当前末尾 5 期作为查询形态", value=True, key="luzhu_use_tail")
-        if use_tail and len(seq) >= 5:
-            default_pat = "".join(seq[-5:])
-        else:
-            default_pat = "大大大小小"
-        pat_text = st.text_input("输入形态（只含「大」「小」，如 大大大小小）", value=default_pat, key="luzhu_pat")
+        st.write(f"**{pat_len} 期形态对照：出现该串之后，下一期是「{labels[0]} / {labels[1]}」的历史比例**")
+        use_tail = st.checkbox(f"使用当前末尾 {pat_len} 期作为查询形态", value=True, key="luzhu_use_tail")
+        default_pat = "".join(tail) if use_tail else (labels[0] * pat_len)
+        hint = "只含大/小，如 大大大小小" if mode == "大小" else "只含单/双，如 单单双双单"
+        pat_text = st.text_input(f"输入 {pat_len} 期形态（{hint}）", value=default_pat, key="luzhu_pat")
 
         if st.button("查询该形态后的下一期比例", key="luzhu_btn"):
-            pattern = parse_dx_pattern(pat_text)
+            pattern = parse_pattern(pat_text, mode)
             if not pattern:
-                st.error("请只输入「大」和「小」组成的字符串")
+                st.error(f"请只输入「{'」和「'.join(labels)}」组成的字符串")
+            elif len(pattern) != pat_len:
+                st.warning(f"当前选择的形态长度是 {pat_len} 期，你输入了 {len(pattern)} 个字符，仍按你输入的长度统计。")
+                result = luzhu_after_pattern(seq, pattern)
             else:
                 result = luzhu_after_pattern(seq, pattern)
-                st.success(f"形态：**{''.join(pattern)}** 在历史中共出现后接一期 **{result['total']}** 次")
+
+            if pattern:
+                result = luzhu_after_pattern(seq, pattern)
+                st.success(f"形态：**{''.join(pattern)}**（{len(pattern)} 期）在历史中出现后接一期共 **{result['total']}** 次")
                 if result["total"] == 0:
-                    st.info("该形态在当前数据中未出现过（或出现在最后一期，无下一期）")
+                    st.info("该形态在当前数据中未出现过（或只在最后一期出现，没有下一期）")
                 else:
-                    r1, r2 = st.columns(2)
-                    r1.metric("下一期是「大」", f"{result['大']} 次", f"{result['大%']}%")
-                    r2.metric("下一期是「小」", f"{result['小']} 次", f"{result['小%']}%")
+                    cols = st.columns(len(labels))
+                    pie_vals, pie_names = [], []
+                    for i, lb in enumerate(labels):
+                        cnt = result.get(lb, 0)
+                        pct = result.get(f"{lb}%", 0)
+                        cols[i].metric(f"下一期是「{lb}」", f"{cnt} 次", f"{pct}%")
+                        pie_vals.append(cnt)
+                        pie_names.append(lb)
                     fig = px.pie(
-                        values=[result["大"], result["小"]],
-                        names=["大", "小"],
+                        values=pie_vals, names=pie_names,
                         title=f"形态「{''.join(pattern)}」之后下一期分布",
-                        color_discrete_map={"大": "#e63946", "小": "#457b9d"},
+                        color=pie_names, color_discrete_map=colors,
                     )
                     st.plotly_chart(fig, use_container_width=True)
-                    st.caption(
-                        f"对照：全体基础比例 大 {base_da/base_total*100:.1f}% / 小 {base_xiao/base_total*100:.1f}%。"
-                        "历史比例接近基础比例是正常的，不代表下一期更可能开某一边。"
-                    )
+                    base_txt = " / ".join(f"{lb} {base_counts[lb]/base_total*100:.1f}%" for lb in labels)
+                    st.caption(f"对照全体基础比例：{base_txt}。历史条件比例接近基础比例是正常现象。")
 
-        # 常用短形态一览
+        # 当前末尾形态一键结果
         st.markdown("---")
-        st.write("**常用短形态速查（最近数据）**")
-        quick_pats = ["大", "小", "大大", "小小", "大小", "小大", "大大大", "小小小"]
+        st.write(f"**当前末尾 {pat_len} 期一键对照**")
+        if len(seq) >= pat_len:
+            r_now = luzhu_after_pattern(seq, seq[-pat_len:])
+            if r_now["total"] > 0:
+                msg = "　".join(f"{lb} {r_now.get(lb,0)}次（{r_now.get(f'{lb}%',0)}%）" for lb in labels)
+                st.info(f"形态 `{''.join(seq[-pat_len:])}` 历史样本 {r_now['total']} 次 → {msg}")
+            else:
+                st.info("当前末尾形态在历史中尚无足够样本。")
+
+        # 5 期常用形态速查（按当前 mode）
+        st.markdown("---")
+        st.write(f"**{pat_len} 期常见形态速查（样本数≥5）**")
+        from collections import Counter as _Counter
+        # 统计所有长度为 pat_len 的形态出现次数，取出现最多的若干个做对照
+        pat_counter = _Counter()
+        for i in range(len(seq) - pat_len):
+            pat_counter[tuple(seq[i : i + pat_len])] += 1
+        top_pats = [list(p) for p, c in pat_counter.most_common(15) if c >= 5]
         qrows = []
-        for p in quick_pats:
-            r = luzhu_after_pattern(seq, list(p))
-            if r["total"] > 0:
-                qrows.append({
-                    "形态": p,
-                    "样本数": r["total"],
-                    "下期大%": r["大%"],
-                    "下期小%": r["小%"],
-                })
+        for p in top_pats:
+            r = luzhu_after_pattern(seq, p)
+            if r["total"] < 5:
+                continue
+            row = {"形态": "".join(p), "样本数": r["total"]}
+            for lb in labels:
+                row[f"下期{lb}%"] = r.get(f"{lb}%", 0)
+            qrows.append(row)
         if qrows:
             st.dataframe(pd.DataFrame(qrows), use_container_width=True)
+        else:
+            st.caption("当前数据量不足，或请加大「拉取最近几天数据」。")
 
     with tab5:
         show_cols = ["期号", "开奖时间", "冠军", "亚军", "第三", "第四", "第五",
                      "第六", "第七", "第八", "第九", "第十", "冠亚和"]
         show_df = df.tail(50)[show_cols].copy()
         show_df["大小"] = show_df["冠亚和"].apply(lambda x: "大" if int(x) > 11 else "小")
+        show_df["单双"] = show_df["冠亚和"].apply(lambda x: "单" if int(x) % 2 == 1 else "双")
         st.dataframe(show_df.iloc[::-1], use_container_width=True, height=400)
         st.download_button("下载当前数据CSV", df.to_csv(index=False).encode("utf-8-sig"),
                            f"feiting_{datetime.now():%Y%m%d}.csv", "text/csv")
@@ -795,18 +886,76 @@ elif lottery == "极速快乐8":
         st.error("极速快乐8 实时数据获取失败，请稍后重试")
         st.stop()
 
-    c1, c2, c3 = st.columns(3)
+    # 会话内积累历史（刷新时自动追加，用于路珠对照）
+    if "kl8s_history" not in st.session_state:
+        st.session_state.kl8s_history = []
+    hist = st.session_state.kl8s_history
+    # 追加最新一期（按期号去重）
+    exists = {str(x.get("期号")) for x in hist}
+    if str(latest["期号"]) not in exists:
+        hist.append({
+            "期号": latest["期号"],
+            "开奖时间": latest["开奖时间"],
+            "和值": latest["和值"],
+            "大小": latest["大小"],
+            "单双": latest["单双"],
+            "组合": latest["组合"],
+            "号码": latest["号码"],
+        })
+        # 按期号排序，最多保留 500 期
+        try:
+            hist.sort(key=lambda x: int(str(x["期号"])) if str(x["期号"]).isdigit() else 0)
+        except Exception:
+            pass
+        st.session_state.kl8s_history = hist[-500:]
+
+    hist = st.session_state.kl8s_history
+    combo_seq = [h["组合"] for h in hist]
+    dx_seq = [h["大小"] for h in hist]
+    ds_seq = [h["单双"] for h in hist]
+
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("最新期号", latest["期号"])
     c2.metric("开奖时间", str(latest["开奖时间"])[:19])
     c3.metric("和值", latest["和值"])
+    c4.metric("组合", latest["组合"])
     nums_str = " ".join(f"{n:02d}" for n in latest["号码"])
-    st.info(f"最新开奖（20码）：{nums_str}")
-    st.caption(f"下期 {latest.get('下期期号','')} · 预计 {latest.get('下期时间','')} · 服务器 {latest.get('服务器时间','')}")
+    st.info(f"最新开奖（20码）：{nums_str} ｜ {latest['大小']} / {latest['单双']} / **{latest['组合']}**")
+    st.caption(
+        f"规则：和值≥810 为大，<810 为小；奇数为单、偶数为双 → 组合为大单/大双/小单/小双。"
+        f"下期 {latest.get('下期期号','')} · {latest.get('下期时间','')} · 已缓存 {len(hist)} 期"
+    )
 
-    st.warning("极速快乐8 目前主要提供实时最新一期。完整历史路珠需自行积累或接入历史接口。以下为当期号码分析。")
+    # ===== 自动对照：最近5期组合形态 → 下期四组合比例 =====
+    _pat_n = 5
+    st.markdown("#### 自动对照 · 下期「大单/大双/小单/小双」（最近 5 期组合形态）")
+    st.caption("开奖更新后自动计算。历史条件比例 **≠** 真实概率，请勿据此投注。缓存期数越多，样本越有参考意义（需保持页面开启并刷新积累）。")
 
+    labels4 = ["大单", "大双", "小单", "小双"]
+    if len(combo_seq) >= _pat_n:
+        pat = combo_seq[-_pat_n:]
+        r = luzhu_after_pattern(combo_seq, pat)
+        st.write(f"当前末尾 5 期组合形态：`{' → '.join(pat)}`")
+        if r["total"] > 0:
+            cols = st.columns(4)
+            for i, lb in enumerate(labels4):
+                cols[i].metric(
+                    f"下期「{lb}」",
+                    f"{r.get(f'{lb}%', 0)}%",
+                    f"{r.get(lb, 0)} / {r['total']} 次",
+                )
+            # 基础比例
+            base_n = len(combo_seq)
+            base_txt = "　".join(f"{lb} {combo_seq.count(lb)/base_n*100:.1f}%" for lb in labels4)
+            st.caption(f"历史样本 {r['total']} 次｜全体基础：{base_txt}")
+        else:
+            st.info("该 5 期组合形态在已缓存历史中尚无「后接一期」样本，请继续刷新积累。")
+    else:
+        st.info(f"已缓存 {len(combo_seq)} 期，需至少 5 期才能做 5 期形态对照。请开启自动刷新多等几期。")
+
+    st.markdown("---")
+    # 当期号码分析
     nums = latest["号码"]
-    # 单期分析
     odd_cnt = sum(1 for x in nums if x % 2 == 1)
     big_cnt = sum(1 for x in nums if x > 40)
     col1, col2, col3 = st.columns(3)
@@ -814,7 +963,6 @@ elif lottery == "极速快乐8":
     col2.metric("大号(41-80)个数", f"{big_cnt} / 20")
     col3.metric("和值", latest["和值"])
 
-    # 简单区间分布
     zones = {"1-20": 0, "21-40": 0, "41-60": 0, "61-80": 0}
     for n in nums:
         if n <= 20:
@@ -829,11 +977,79 @@ elif lottery == "极速快乐8":
                  labels={"x": "区间", "y": "个数"}, color=list(zones.values()), color_continuous_scale="Teal")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.write("**当期号码列表**")
-    st.code(nums_str)
+    # 手动查询路珠
+    st.markdown("---")
+    st.subheader("组合路珠手动查询（大单/大双/小单/小双）")
+    qmode = st.radio("序列类型", ["组合(四态)", "大小", "单双"], horizontal=True, key="kl8s_qmode")
+    if qmode == "组合(四态)":
+        seq_q = combo_seq
+        allowed = "大单大双小单小双"
+        hint = "如：大单小双大单小单大双（每项两字，共5项=10字）"
+        # 输入按两字一组
+    elif qmode == "大小":
+        seq_q = dx_seq
+        allowed = "大小"
+        hint = "如：大小大小大"
+    else:
+        seq_q = ds_seq
+        allowed = "单双"
+        hint = "如：单双单单双"
 
-    if st.button("立即刷新最新一期"):
+    pat_len = st.selectbox("形态期数", [3, 4, 5, 6], index=2, key="kl8s_pat_len")
+    use_tail = st.checkbox("使用当前末尾形态", value=True, key="kl8s_use_tail")
+    if use_tail and len(seq_q) >= pat_len:
+        if qmode == "组合(四态)":
+            default_pat = "".join(seq_q[-pat_len:])
+        else:
+            default_pat = "".join(seq_q[-pat_len:])
+    else:
+        default_pat = ""
+
+    pat_text = st.text_input(f"输入形态（{hint}）", value=default_pat, key="kl8s_pat")
+
+    def parse_combo_pattern(text: str, mode: str, length: int):
+        t = text.strip().replace(" ", "").replace("，", "").replace(",", "")
+        if mode == "组合(四态)":
+            # 每 2 字一项
+            if len(t) % 2 != 0:
+                return None
+            items = [t[i:i+2] for i in range(0, len(t), 2)]
+            if any(x not in ("大单", "大双", "小单", "小双") for x in items):
+                return None
+            return items
+        else:
+            allowed_ch = "大小" if mode == "大小" else "单双"
+            if not t or any(c not in allowed_ch for c in t):
+                return None
+            return list(t)
+
+    if st.button("查询形态后下一期比例", key="kl8s_btn"):
+        pattern = parse_combo_pattern(pat_text, qmode, pat_len)
+        if not pattern:
+            st.error("形态格式不正确")
+        else:
+            result = luzhu_after_pattern(seq_q, pattern)
+            st.success(f"形态：{' → '.join(pattern)}｜历史样本 {result['total']} 次")
+            if result["total"] == 0:
+                st.info("样本不足，请继续积累缓存期数")
+            else:
+                keys = labels4 if qmode == "组合(四态)" else (("大", "小") if qmode == "大小" else ("单", "双"))
+                cols = st.columns(len(keys))
+                for i, lb in enumerate(keys):
+                    cols[i].metric(lb, f"{result.get(f'{lb}%', 0)}%", f"{result.get(lb, 0)} 次")
+
+    # 缓存历史表
+    st.markdown("---")
+    st.write(f"**已缓存开奖（{len(hist)} 期）**")
+    if hist:
+        hdf = pd.DataFrame(hist)[["期号", "开奖时间", "和值", "大小", "单双", "组合"]].iloc[::-1]
+        st.dataframe(hdf.head(50), use_container_width=True, height=300)
+    if st.button("清空缓存历史", key="kl8s_clear"):
+        st.session_state.kl8s_history = []
         st.rerun()
+    if st.button("立即刷新最新一期", key="kl8s_refresh"):
+        st.rerun()
+
 
 st.markdown("---")
 st.caption("仅供学习与数据分析练习 | 请理性购彩，远离赌博心态")
